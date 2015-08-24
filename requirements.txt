@@ -1,0 +1,5 @@
+Django>=1.6
+djangorestframework>=3.0
+openpyxl>=2.0
+six
+zipstream
