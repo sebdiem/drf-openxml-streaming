@@ -60,23 +60,23 @@ class OpenXMLRenderer(renderers.BaseRenderer):
         )
         sheet_data_tag = '<sheetData>'
         column_headers = renderer_context.get(OpenXMLRenderer.column_headers_key)
-        header_row = OpenXMLRenderer.render_row(data=column_headers, line=1, renderer_context=header_context)
+        header_row = OpenXMLRenderer.render_row(data=[{'value': v, 't': 'inlineStr'} for v in column_headers], line=1, renderer_context=header_context)
 
         return ''.join([ws_namespace, sheet_data_tag, header_row])
 
     @staticmethod
     def render_cell(data, line, column, renderer_context):
         attr = renderer_context.get(OpenXMLRenderer.column_attributes_key, None)
-        column = ETree.Element('c', attr[column] if attr else {})
-        column.set('r', "{column}{line}".format(column=get_column_letter(column + 1), line=line))
+        cell = ETree.Element('c', attr[column] if attr else {'t': 'inlineStr'})
+        cell.set('r', "{column}{line}".format(column=get_column_letter(column + 1), line=line))
         if attr is not None and attr[column].get('t') == 'n':
             # column is of type number in excel
-            value = ETree.SubElement(column, 'v')
+            value = ETree.SubElement(cell, 'v')
         else:
             # we use the inlineStr excel type to avoid references to another xml file
-            value = ETree.SubElement(column, 'is').append(ETree.Element('t'))
-        value.text = six.text_type(data)
-        return column
+            value = ETree.SubElement(ETree.SubElement(cell, 'is'), 't')
+        value.text = six.text_type(data['value'])
+        return cell
 
     @staticmethod
     def render_row(data, line, renderer_context):
@@ -114,25 +114,25 @@ class OpenXMLRenderer(renderers.BaseRenderer):
         yield OpenXMLRenderer.render_footer().encode('utf-8')
 
     def render(self, data, accepted_media_type=None, renderer_context=None):
-        """Generates a xlsx file whose rows are generated from the `data` iterator.
+        """Generates a xlsx file whose rows are generated from the `data`
+        iterator.
 
-        We use `openpyxl` to generate a xlsx file based on the first row of data and
-        then reuse the generated files to build the final xlsx.
-        The returned file is a `zipstream.Zipfile` archive which can be streamed over
-        Http without loading its content in memory (useful for huge datasets).
+        We use `openpyxl` to generate a xlsx file based on the first row of
+        data and then reuse the generated files to build the final xlsx. The
+        returned file is a `zipstream.Zipfile` archive which can be streamed
+        over Http without loading its content in memory (useful for huge
+        datasets).
 
         Return: the zipstream.ZipFile archive representing the xlsx file
         """
         renderer_context = renderer_context or {}
         sheet_name = 'xl/worksheets/sheet1.xml'
 
-        print(data)
-        first_chunk = next(data)  # extract the first rows of data to determine column types and column orders
-        data = chain([first_chunk], data)
-        print(data)
-        print(first_chunk)
-        zip_template = zipfile.ZipFile(utils.create_xlsx_template(first_chunk[0]), mode='r')
-
+        # Extract the first rows of data to determine column types and column
+        # orders. The first row is not serialized so that raw datatypes are not
+        # "lost" (see `OpenXMLListMixin.data_stream()`).
+        first_row = next(data)
+        zip_template = zipfile.ZipFile(utils.create_xlsx_template(first_row), mode='r')
 
         # Copy `zip_template` in a zipstream object, except the sheet data
         stream = zipstream.ZipFile(mode='w', compression=zipstream.ZIP_DEFLATED)
@@ -199,12 +199,22 @@ class OpenXMLListMixin(mixins.ListModelMixin):
         return ret
 
     def data_stream(self, request):
+        """Filter the queryset and yield it by chunks of
+        `self.streaming_page_size`.
+
+        ..note: The first yielded data is a row containing raw datatypes from
+        the database (unserialized). This is used to create the template xlsx
+        file.
+        """
         serializer_class = self.open_xml_serializer_class
         queryset = self.filter_queryset(self.get_queryset())
         paginate_by = self.streaming_page_size
         for start in range(0, queryset.count(), paginate_by):
             end = start + paginate_by
-            yield serializer_class(queryset[start:end], many=True, context={'request': request}).data
+            rows = list(queryset[start:end])  # force the query
+            if start == 0:
+                yield serializer_class(rows[0], convert=False, context={'request': request}).data
+            yield serializer_class(rows, many=True, context={'request': request}).data
 
     def list_as_open_xml(self, request):
         column_headers = utils.get_column_headers(self.open_xml_serializer_class)

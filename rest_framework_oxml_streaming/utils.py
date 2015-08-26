@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from io import BytesIO
 from xml.etree import ElementTree as ETree
 
@@ -21,6 +22,7 @@ def create_xlsx_template(first_row):
         cell.value = data.pop('value')
         for key, value in data.items():
             setattr(cell, key, value)
+        data['value'] = cell.internal_value
     return BytesIO(save_virtual_workbook(wb))
 
 
@@ -41,10 +43,10 @@ def extract_column_attributes(xml):
     column_attributes = [el.attrib for el in first_row.findall('%sc' % OPENXML_NS)]
     for attrib in column_attributes:
         attrib.pop('r')  # remove cell reference
-    return column_attributes
+    return _replace_reference_str_by_inline(column_attributes)
 
-def replace_reference_str_by_inline(column_attributes):
-    ret = column_attributes.copy()
+def _replace_reference_str_by_inline(column_attributes):
+    ret = [d.copy() for d in column_attributes]
     for d in ret:
         if d.get('t') == 's':
             d['t'] = 'inlineStr'
